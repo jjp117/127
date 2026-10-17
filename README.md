@@ -3,7 +3,7 @@
   <span style="margin:0 10px;color:#24292f">简体中文</span>
 </h4>
 <p align="center">
-<img src="https://jjp.pages.dev/1.png" width="300"/>
+<img src="https://jjp2.pages.dev/1.png" width="300"/>
 </p>
 <h1 align="center">JJP｜本地化 EXIF 元数据透视与清洗引擎</h1>
 <p align="center">
