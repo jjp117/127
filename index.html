@@ -1,0 +1,1117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JJP 隐私透镜 — EXIF 元数据透视与城市定位</title>
+  <script src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/full.umd.js"></script>
+  <script>
+    // 确保 exifr 可用
+    if (typeof exifr === 'undefined') {
+      console.error('exifr 库加载失败，将使用备用 CDN');
+      document.write('<script src="https://unpkg.com/exifr@7.1.3/dist/full.umd.js"><\/script>');
+    }
+  </script>
+  <style>
+    :root {
+      --glass-bg: rgba(255, 255, 255, 0.04);
+      --glass-border: rgba(255, 255, 255, 0.1);
+      --accent: #6366f1;
+      --accent-glow: rgba(99, 102, 241, 0.4);
+      --danger: #ef4444;
+      --danger-glow: rgba(239, 68, 68, 0.3);
+      --success: #10b981;
+      --warning: #f59e0b;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+      background: #08080d; color: #f0f0f0; min-height: 100vh; overflow-x: hidden;
+    }
+    .bg-scene {
+      position: fixed; inset: 0; z-index: 0;
+      background: radial-gradient(ellipse at 20% 50%, rgba(99,102,241,0.07) 0%, transparent 50%),
+                  radial-gradient(ellipse at 80% 20%, rgba(139,92,246,0.05) 0%, transparent 50%),
+                  radial-gradient(ellipse at 50% 80%, rgba(59,130,246,0.04) 0%, transparent 50%), #08080d;
+    }
+    .orb { position: fixed; border-radius: 50%; filter: blur(80px); opacity: 0.35; pointer-events: none; animation: orbFloat 20s ease-in-out infinite; }
+    .orb-1 { width: 400px; height: 400px; background: rgba(99,102,241,0.12); top: 10%; left: 5%; }
+    .orb-2 { width: 300px; height: 300px; background: rgba(139,92,246,0.1); top: 60%; right: 10%; animation-delay: -7s; }
+    .orb-3 { width: 250px; height: 250px; background: rgba(59,130,246,0.08); bottom: 10%; left: 30%; animation-delay: -14s; }
+    @keyframes orbFloat { 0%,100%{transform:translate(0,0) scale(1)} 33%{transform:translate(30px,-30px) scale(1.1)} 66%{transform:translate(-20px,20px) scale(0.9)} }
+
+    .container { position: relative; z-index: 1; max-width: 1100px; margin: 0 auto; padding: 3rem 1.5rem; }
+    @media (min-width:768px) { .container { padding: 4rem 2rem; } }
+
+    .glass-card {
+      background: var(--glass-bg); backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%);
+      border: 1px solid var(--glass-border); border-radius: 24px; position: relative; overflow: hidden;
+      transition: transform 0.2s ease-out, box-shadow 0.3s ease; transform-style: preserve-3d;
+    }
+    .glass-card::before { content:''; position:absolute; top:0; left:0; right:0; height:1px; background:linear-gradient(90deg,transparent,rgba(255,255,255,0.15),transparent); }
+    .glass-card::after { content:''; position:absolute; inset:0; border-radius:24px; pointer-events:none; background:radial-gradient(500px circle at var(--mouse-x,50%) var(--mouse-y,50%),rgba(255,255,255,0.05),transparent 40%); opacity:0; transition:opacity 0.3s; }
+    .glass-card:hover::after { opacity:1; }
+
+    .header { text-align: center; margin-bottom: 2.5rem; }
+    .header-inner { display: inline-flex; align-items: center; gap: 12px; margin-bottom: 1rem; }
+    .logo-icon { width:48px; height:48px; border-radius:16px; background:linear-gradient(135deg,#6366f1,#8b5cf6); display:flex; align-items:center; justify-content:center; box-shadow:0 8px 30px rgba(99,102,241,0.3); }
+    .logo-icon svg { width:24px; height:24px; }
+    .title { font-size:2rem; font-weight:700; background:linear-gradient(135deg,#fff,#c7d2fe,#ddd6fe); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
+    @media(min-width:768px){.title{font-size:2.5rem}}
+    .subtitle { color:rgba(255,255,255,0.45); font-size:1rem; max-width:520px; margin:0 auto; line-height:1.6; }
+
+    .db-warning { background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.25); border-radius:16px; padding:12px 18px; margin-bottom:1.5rem; display:flex; align-items:center; gap:10px; font-size:0.85rem; color:#fcd34d; }
+
+    .upload-zone { border:2px dashed rgba(255,255,255,0.12); border-radius:20px; padding:3rem 2rem; text-align:center; cursor:pointer; transition:all 0.4s cubic-bezier(0.34,1.56,0.64,1); }
+    .upload-zone:hover { border-color:var(--accent); background:rgba(99,102,241,0.04); transform:scale(1.01); }
+    .upload-zone.drag-over { border-color:var(--accent); background:rgba(99,102,241,0.08); transform:scale(1.02); box-shadow:0 0 50px var(--accent-glow); }
+    .upload-icon { width:80px; height:80px; border-radius:50%; background:linear-gradient(135deg,rgba(99,102,241,0.15),rgba(139,92,246,0.15)); display:flex; align-items:center; justify-content:center; margin:0 auto 1.5rem; border:1px solid rgba(255,255,255,0.08); }
+    .upload-icon svg { width:36px; height:36px; color:#818cf8; }
+    .upload-title { color:rgba(255,255,255,0.8); font-size:1.1rem; font-weight:500; margin-bottom:0.5rem; }
+    .upload-hint { color:rgba(255,255,255,0.35); font-size:0.875rem; }
+
+    /* Result layout */
+    .result-layout { display:grid; grid-template-columns:1fr; gap:1.5rem; margin-top:1.5rem; }
+    @media(min-width:768px){.result-layout{grid-template-columns:340px 1fr}}
+    .preview-wrap { display:flex; justify-content:center; }
+    .preview-image { border-radius:16px; max-height:320px; max-width:100%; object-fit:contain; box-shadow:0 20px 60px rgba(0,0,0,0.5); transition:transform 0.3s ease; }
+    .preview-image:hover { transform:scale(1.02); }
+    .result-info { text-align:center; }
+    @media(min-width:768px){.result-info{text-align:left}}
+    .file-name { font-size:1.1rem; font-weight:600; color:#fff; margin-bottom:0.5rem; word-break:break-all; }
+    .file-meta { color:rgba(255,255,255,0.4); font-size:0.8rem; margin-bottom:1.25rem; }
+
+    .stats { display:flex; flex-wrap:wrap; gap:0.6rem; margin-bottom:1.25rem; justify-content:center; }
+    @media(min-width:768px){.stats{justify-content:flex-start}}
+    .stat-badge { display:flex; align-items:center; gap:6px; padding:5px 12px; border-radius:100px; font-size:0.75rem; font-weight:500; }
+    .stat-danger { background:rgba(239,68,68,0.1); border:1px solid rgba(239,68,68,0.2); color:#fca5a5; }
+    .stat-total { background:rgba(99,102,241,0.1); border:1px solid rgba(99,102,241,0.2); color:#a5b4fc; }
+    .stat-clean { background:rgba(16,185,129,0.1); border:1px solid rgba(16,185,129,0.2); color:#6ee7b7; }
+    .status-dot { width:7px; height:7px; border-radius:50%; animation:pulseDot 2s ease-in-out infinite; }
+    .dot-red { background:#f87171; }
+    .dot-green { background:#34d399; }
+    @keyframes pulseDot { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(0.7)} }
+
+    /* GPS location card */
+    .gps-card { padding:1.25rem; margin-bottom:1rem; }
+    .gps-card-hit { background:rgba(239,68,68,0.06); border:1px solid rgba(239,68,68,0.2); }
+    .gps-card-miss { background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); }
+    .gps-header { display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+    .gps-header svg { width:20px; height:20px; flex-shrink:0; }
+    .gps-label { font-size:0.85rem; font-weight:600; }
+    .gps-card-hit .gps-label { color:#fca5a5; }
+    .gps-card-miss .gps-label { color:rgba(255,255,255,0.6); }
+    .gps-city { font-size:1.5rem; font-weight:700; color:#fff; margin:4px 0; }
+    .gps-coords { font-size:0.8rem; color:rgba(255,255,255,0.4); margin-bottom:8px; }
+    .gps-hint { font-size:0.8rem; color:rgba(255,255,255,0.4); line-height:1.5; }
+
+    .btn-copy {
+      display:inline-flex; align-items:center; gap:6px; padding:8px 16px; border-radius:10px;
+      background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1);
+      color:rgba(255,255,255,0.7); font-size:0.8rem; font-weight:500; cursor:pointer; margin-top:10px; transition:all 0.2s ease;
+    }
+    .btn-copy:hover { background:rgba(255,255,255,0.1); color:#fff; }
+    .btn-copy:active { transform:scale(0.95); }
+    .btn-copy svg { width:14px; height:14px; }
+
+    /* Metadata table */
+    .meta-section { padding:1.25rem; margin-top:1rem; }
+    .meta-header { display:flex; align-items:center; gap:8px; margin-bottom:1rem; }
+    .meta-header svg { width:20px; height:20px; flex-shrink:0; }
+    .meta-title { font-size:1rem; font-weight:600; }
+    .meta-count { margin-left:auto; font-size:0.7rem; padding:4px 10px; border-radius:100px; }
+
+    .meta-table { width:100%; border-collapse:collapse; }
+    .meta-table tr { border-bottom:1px solid rgba(255,255,255,0.05); transition:background 0.2s; }
+    .meta-table tr:hover { background:rgba(255,255,255,0.03); }
+    .meta-table tr:last-child { border-bottom:none; }
+    .meta-table td { padding:10px 12px; font-size:0.85rem; vertical-align:top; }
+    .meta-table .col-key { color:rgba(255,255,255,0.5); width:140px; font-weight:500; white-space:nowrap; }
+    .meta-table .col-val { color:rgba(255,255,255,0.85); word-break:break-all; }
+    .meta-table tr.row-danger { background:rgba(239,68,68,0.04); }
+    .meta-table tr.row-danger:hover { background:rgba(239,68,68,0.08); }
+    .meta-table tr.row-danger .col-key { color:#fca5a5; }
+    .meta-table tr.row-danger .col-val { color:#fecaca; }
+    .danger-tag { display:inline-block; font-size:0.65rem; padding:2px 6px; border-radius:4px; background:rgba(239,68,68,0.15); color:#f87171; margin-left:6px; vertical-align:middle; }
+
+    /* Buttons */
+    .btn-group { display:flex; flex-wrap:wrap; gap:0.75rem; justify-content:center; margin-top:1rem; }
+    @media(min-width:768px){.btn-group{justify-content:flex-start}}
+    .btn { display:inline-flex; align-items:center; gap:8px; padding:14px 28px; border-radius:16px; font-weight:600; font-size:0.95rem; cursor:pointer; border:none; position:relative; overflow:hidden; transition:all 0.2s ease; color:#fff; }
+    .btn:hover { transform:translateY(-2px); }
+    .btn:active { transform:scale(0.95) translateY(0); transition:all 0.1s ease; }
+    .btn-glass { background:rgba(255,255,255,0.07); backdrop-filter:blur(12px); border:1px solid rgba(255,255,255,0.12); }
+    .btn-glass:hover { background:rgba(255,255,255,0.1); box-shadow:0 8px 30px rgba(0,0,0,0.3); }
+    .btn-danger { background:linear-gradient(135deg,#ef4444,#dc2626); border:1px solid rgba(239,68,68,0.3); box-shadow:0 4px 20px var(--danger-glow); }
+    .btn-danger:hover { box-shadow:0 8px 40px var(--danger-glow); }
+    .btn svg { width:18px; height:18px; }
+    .btn-big { padding:18px 36px; font-size:1.1rem; border-radius:20px; width:100%; justify-content:center; }
+
+    .ripple { position:absolute; border-radius:50%; background:rgba(255,255,255,0.25); transform:scale(0); animation:rippleAnim 0.6s ease-out forwards; pointer-events:none; }
+    @keyframes rippleAnim { to{transform:scale(4);opacity:0} }
+
+    .msg-card { padding:1rem 1.25rem; margin-top:1rem; }
+    .msg-inner { display:flex; align-items:center; gap:10px; }
+    .msg-error { color:#fca5a5; font-size:0.875rem; }
+    .spinner { animation:spin 1s linear infinite; }
+    @keyframes spin { to{transform:rotate(360deg)} }
+
+    .anim-in { animation:fadeInUp 0.7s cubic-bezier(0.34,1.56,0.64,1) forwards; opacity:0; }
+    .d1{animation-delay:0.1s} .d2{animation-delay:0.2s} .d3{animation-delay:0.3s} .d4{animation-delay:0.4s}
+    @keyframes fadeInUp { from{opacity:0;transform:translateY(25px) scale(0.97)} to{opacity:1;transform:translateY(0) scale(1)} }
+
+    .footer { text-align:center; margin-top:4rem; color:rgba(255,255,255,0.18); font-size:0.8rem; }
+    ::-webkit-scrollbar{width:5px} ::-webkit-scrollbar-track{background:transparent} ::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.12);border-radius:3px}
+    .hidden{display:none!important}
+  </style>
+</head>
+<body>
+  <div class="bg-scene"></div>
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+  <div class="orb orb-3"></div>
+
+  <div class="container">
+    <header class="header anim-in d1">
+      <div class="header-inner">
+        <div class="logo-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>
+          </svg>
+        </div>
+        <h1 class="title">JJP 隐私透镜</h1>
+      </div>
+      <p class="subtitle">透视图片中隐藏的 EXIF 元数据，自动匹配 GPS 所在城市，一键清洗隐私</p>
+    </header>
+
+    <div id="dbWarning" class="db-warning hidden">
+      <span>❌</span>
+      <span>未检测到 china_cities_bbox.txt，城市匹配功能不可用。请将数据文件放在同目录下。</span>
+    </div>
+
+    <div id="uploadSection" class="anim-in d2">
+      <div id="uploadZone" class="glass-card upload-zone">
+        <input type="file" id="fileInput" accept="image/jpeg,image/png,image/heic,image/heif,image/webp" style="display:none" />
+        <div class="upload-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+          </svg>
+        </div>
+        <p class="upload-title">拖拽图片到此处</p>
+        <p class="upload-hint">或点击选择文件 · 支持 JPG / PNG / HEIC</p>
+      </div>
+    </div>
+
+    <div id="errorMsg" class="glass-card msg-card hidden">
+      <div class="msg-inner"><div class="status-dot dot-red"></div><span id="errorText" class="msg-error"></span></div>
+    </div>
+
+    <div id="resultsSection" class="hidden">
+      <div class="result-layout">
+        <div class="glass-card anim-in d2" style="padding:1.5rem">
+          <div class="preview-wrap">
+            <img id="previewImg" class="preview-image" alt="Preview" />
+          </div>
+          <div style="margin-top:1rem;text-align:center">
+            <h2 id="fileName" class="file-name"></h2>
+            <p id="fileMeta" class="file-meta"></p>
+          </div>
+        </div>
+
+        <div class="glass-card anim-in d3" style="padding:1.5rem">
+          <div class="stats">
+            <div id="statDanger" class="stat-badge stat-danger hidden"><div class="status-dot dot-red"></div><span id="dangerCount"></span></div>
+            <div id="statTotal" class="stat-badge stat-total hidden"><span id="totalCount"></span></div>
+            <div id="statClean" class="stat-badge stat-clean hidden"><div class="status-dot dot-green"></div><span>已清洗 ✓</span></div>
+          </div>
+
+          <div id="gpsSection" class="hidden"></div>
+
+          <div class="btn-group">
+            <button id="btnReset" class="btn btn-glass">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+              </svg>
+              重新上传
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Full metadata table -->
+      <div id="allMetaSection" class="glass-card meta-section anim-in d3 hidden">
+        <div class="meta-header">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+          </svg>
+          <span class="meta-title" style="color:rgba(255,255,255,0.8)">📋 全部元数据</span>
+          <span id="allMetaCount" class="meta-count" style="background:rgba(99,102,241,0.1);color:#a5b4fc"></span>
+        </div>
+        <table class="meta-table">
+          <tbody id="allMetaBody"></tbody>
+        </table>
+      </div>
+
+      <div id="noDataSection" class="glass-card meta-section anim-in d3 hidden" style="text-align:center">
+        <div style="display:flex;flex-direction:column;align-items:center;gap:12px">
+          <div style="width:64px;height:64px;border-radius:50%;background:rgba(16,185,129,0.1);display:flex;align-items:center;justify-content:center;border:1px solid rgba(16,185,129,0.2)">
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
+            </svg>
+          </div>
+          <p style="color:#6ee7b7;font-weight:500">🎉 图片很干净</p>
+          <p style="color:rgba(255,255,255,0.4);font-size:0.85rem">未检测到任何 EXIF 元数据</p>
+        </div>
+      </div>
+
+      <div style="margin-top:1.5rem">
+        <button id="btnClean" class="btn btn-danger btn-big">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            <path d="M9 12l2 2 4-4"/>
+          </svg>
+          <span id="btnCleanText">🧹 一键剥离隐私并下载</span>
+        </button>
+      </div>
+    </div>
+
+    <footer class="footer anim-in d4">
+      <p>JJP Privacy Lens · 所有处理均在本地完成，不上传任何数据</p>
+    </footer>
+  </div>
+
+  <script>
+    // ============================================================
+    // JJP Privacy Lens — EXIF + City Matching + 中文翻译
+    // ============================================================
+
+    // ---- EXIF 字段名中文翻译表 ----
+    const KEY_CN = {
+      // GPS 相关
+      'GPSLatitude': 'GPS 纬度', 'GPSLongitude': 'GPS 经度', 'GPSAltitude': 'GPS 海拔',
+      'GPSPosition': 'GPS 位置', 'GPSDateStamp': 'GPS 日期', 'GPSTimeStamp': 'GPS 时间',
+      'latitude': '纬度', 'longitude': '经度', 'altitude': '海拔',
+      'GPSAltitudeRef': '海拔参考', 'GPSLatitudeRef': '纬度方向', 'GPSLongitudeRef': '经度方向',
+      'GPSSpeed': 'GPS 速度', 'GPSSpeedRef': '速度单位', 'GPSImgDirection': '拍摄方向',
+      'GPSImgDirectionRef': '方向参考', 'GPSMapDatum': '地图基准', 'GPSProcessingMethod': '定位方式',
+      'GPSDOP': '精度因子', 'GPSSatellites': '卫星数', 'GPSStatus': '状态',
+      'GPSMeasureMode': '测量模式', 'GPSVersionID': 'GPS 版本',
+
+      // 设备信息
+      'Make': '制造商', 'Model': '设备型号', 'LensModel': '镜头型号',
+      'LensMake': '镜头制造商', 'BodySerialNumber': '机身序列号',
+      'CameraSerialNumber': '相机序列号', 'LensSerialNumber': '镜头序列号',
+      'InternalSerialNumber': '内部序列号', 'SerialNumber': '序列号',
+
+      // 拍摄参数
+      'ExposureTime': '曝光时间', 'FNumber': '光圈值', 'ISO': 'ISO 感光度',
+      'ISOSpeedRatings': 'ISO 感光度', 'ExposureProgram': '曝光模式',
+      'ExposureMode': '曝光模式', 'MeteringMode': '测光模式',
+      'FocalLength': '焦距', 'FocalLengthIn35mmFormat': '等效焦距(35mm)',
+      'ShutterSpeedValue': '快门速度', 'ApertureValue': '光圈值',
+      'BrightnessValue': '亮度值', 'ExposureCompensation': '曝光补偿',
+      'MaxApertureValue': '最大光圈', 'Flash': '闪光灯',
+      'FlashEnergy': '闪光灯能量', 'WhiteBalance': '白平衡',
+      'DigitalZoomRatio': '数码变焦比', 'SceneCaptureType': '场景类型',
+      'Contrast': '对比度', 'Saturation': '饱和度', 'Sharpness': '锐度',
+      'SubjectDistanceRange': '主体距离范围', 'GainControl': '增益控制',
+
+      // 镜头参数
+      'LensInfo': '镜头信息', 'LensSpecification': '镜头规格',
+      'FocalPlaneXResolution': '焦平面X分辨率', 'FocalPlaneYResolution': '焦平面Y分辨率',
+      'FocalPlaneResolutionUnit': '焦平面分辨率单位',
+
+      // 图像信息
+      'ImageWidth': '图像宽度', 'ImageHeight': '图像高度', 'ImageDescription': '图像描述',
+      'Orientation': '方向', 'XResolution': '水平分辨率', 'YResolution': '垂直分辨率',
+      'ResolutionUnit': '分辨率单位', 'BitsPerSample': '位深度',
+      'Compression': '压缩方式', 'ColorSpace': '色彩空间',
+      'ComponentsConfiguration': '分量配置', 'CompressedBitsPerPixel': '压缩位深',
+
+      // 时间信息
+      'DateTimeOriginal': '拍摄时间', 'CreateDate': '创建时间', 'ModifyDate': '修改时间',
+      'DateTime': '日期时间', 'DateTimeDigitized': '数字化时间',
+      'SubSecTime': '亚秒时间', 'SubSecTimeOriginal': '亚秒拍摄时间',
+      'SubSecTimeDigitized': '亚秒数字化时间', 'OffsetTime': '时区偏移',
+      'OffsetTimeOriginal': '拍摄时区', 'OffsetTimeDigitized': '数字化时区',
+
+      // 作者/版权
+      'Artist': '作者', 'OwnerName': '所有者', 'Copyright': '版权信息',
+      'UserComment': '用户注释', 'ImageUniqueID': '图像唯一ID',
+
+      // 软件
+      'Software': '软件', 'ProcessingSoftware': '处理软件',
+      'CreatorTool': '创建工具',
+
+      // 缩略图
+      'ThumbnailOffset': '缩略图偏移', 'ThumbnailLength': '缩略图长度',
+      'ThumbnailImage': '缩略图',
+
+      // 其他
+      'ExifVersion': 'EXIF 版本', 'FlashpixVersion': 'Flashpix 版本',
+      'ExifImageWidth': 'EXIF 图像宽度', 'ExifImageHeight': 'EXIF 图像高度',
+      'InteropIndex': '互操作索引', 'InteropVersion': '互操作版本',
+      'SensingMethod': '传感器类型', 'FileSource': '文件来源',
+      'CustomRendered': '自定义处理', 'SceneType': '场景类型',
+      'CFAPattern': 'CFA 模式', 'PhotometricInterpretation': '光度解释',
+      'PlanarConfiguration': '平面配置', 'SamplesPerPixel': '每像素采样数',
+      'RowsPerStrip': '每条行数', 'StripOffsets': '条偏移',
+      'StripByteCounts': '条字节数', 'YCbCrSubSampling': 'YCbCr 子采样',
+      'YCbCrPositioning': 'YCbCr 定位', 'SubjectArea': '主体区域',
+      'SubjectDistance': '主体距离', 'SubjectLocation': '主体位置',
+      'DeviceSettingDescription': '设备设置描述', 'ImageSourceData': '图像源数据',
+      'RecommendedExposureIndex': '推荐曝光指数', 'SensitivityType': '灵敏度类型',
+      'StandardOutputSensitivity': '标准输出灵敏度',
+    };
+
+    function translateKey(key) {
+      return KEY_CN[key] || key;
+    }
+
+    // ---- 敏感字段 ----
+    const SENSITIVE_KEYS = new Set([
+      'gpslatitude','gpslongitude','gpsaltitude','gpsposition',
+      'latitude','longitude','altitude',
+      'serialnumber','internalserialnumber','cameraserialnumber',
+      'lensserialnumber','bodyserialnumber',
+      'ownername','artist','copyright',
+      'gpsdatestamp','gpstimestamp',
+      'datetimeoriginal','createdate','modifydate',
+      'make','model','lensmodel','imagedescription','software',
+    ]);
+
+    // ---- City Database (内联数据) ----
+    const CITY_DATA_INLINE = `北京,39.44,41.06,115.42,117.51
+天津,38.56,40.25,116.70,118.05
+上海,30.67,31.88,120.85,122.12
+重庆,28.16,32.13,105.29,110.19
+石家庄,37.45,39.05,113.65,115.45
+唐山,38.72,40.45,117.55,119.55
+秦皇岛,39.35,40.45,118.82,119.95
+邯郸,36.00,37.45,113.65,115.65
+邢台,36.85,37.75,113.65,115.35
+保定,38.25,40.05,113.65,116.55
+张家口,39.50,42.15,113.50,116.55
+承德,40.15,42.65,115.55,119.15
+沧州,37.45,39.15,115.85,118.05
+廊坊,38.75,40.15,115.95,117.35
+衡水,37.05,38.35,114.85,116.65
+太原,37.25,38.45,111.65,113.35
+大同,39.35,40.75,112.35,114.55
+阳泉,37.55,38.45,112.85,114.25
+长治,35.85,37.15,111.85,113.65
+晋城,35.15,36.25,111.85,113.55
+朔州,39.00,40.35,111.45,113.55
+晋中,36.75,38.15,111.75,113.75
+运城,34.55,35.75,110.15,112.15
+忻州,38.05,40.05,110.75,113.75
+临汾,35.55,37.05,110.35,112.55
+吕梁,36.85,39.05,110.15,112.55
+呼和浩特,40.15,41.35,110.75,112.35
+包头,40.15,42.05,108.75,111.35
+乌海,39.15,39.95,106.55,107.55
+赤峰,41.55,45.55,116.35,120.55
+通辽,42.55,46.15,119.55,123.55
+鄂尔多斯,37.55,40.25,106.55,111.55
+呼伦贝尔,47.55,53.35,115.35,126.55
+巴彦淖尔,40.15,42.55,105.35,109.55
+乌兰察布,40.55,42.75,110.35,114.55
+兴安盟,44.55,48.15,119.35,123.35
+锡林郭勒盟,42.55,47.05,111.35,120.55
+阿拉善盟,37.35,42.55,97.15,106.55
+沈阳,41.05,42.35,122.25,124.15
+大连,38.55,40.25,120.55,123.35
+鞍山,40.35,41.55,122.15,123.65
+抚顺,41.15,42.45,123.35,125.35
+本溪,40.65,41.65,123.35,125.15
+丹东,39.65,41.15,123.35,125.35
+锦州,41.05,42.15,120.65,122.35
+营口,40.15,41.15,121.55,123.15
+阜新,41.55,42.85,120.55,122.75
+辽阳,40.85,41.75,122.55,123.75
+盘锦,40.65,41.55,121.55,122.75
+铁岭,41.85,43.15,122.85,125.15
+朝阳,40.55,42.55,119.35,122.15
+葫芦岛,39.85,41.15,119.15,121.15
+长春,43.35,44.75,124.35,126.35
+吉林,42.65,44.15,125.55,127.75
+四平,42.75,44.15,123.35,125.35
+辽源,42.35,43.45,124.55,126.15
+通化,41.65,43.25,125.35,127.35
+白山,41.35,42.85,126.15,128.55
+松原,44.05,45.75,123.55,125.55
+白城,44.55,46.35,121.75,124.55
+延边,42.15,44.35,128.35,131.35
+哈尔滨,44.55,46.55,125.35,128.35
+齐齐哈尔,46.55,48.75,122.35,126.55
+鸡西,44.85,46.55,130.15,132.55
+鹤岗,46.75,48.55,130.15,132.35
+双鸭山,45.55,47.55,130.75,133.55
+大庆,45.75,47.55,123.75,126.55
+伊春,46.25,49.15,127.35,130.35
+佳木斯,45.55,48.15,129.55,133.55
+七台河,45.35,46.55,130.35,131.75
+牡丹江,43.35,45.55,128.55,131.55
+黑河,47.55,50.55,124.55,129.55
+绥化,45.75,48.15,124.75,128.55
+大兴安岭,50.15,53.55,121.35,127.55
+南京,31.25,32.35,118.15,119.35
+无锡,31.25,32.15,119.75,120.75
+徐州,33.55,35.05,116.35,118.55
+常州,31.35,32.25,119.35,120.35
+苏州,30.75,32.15,120.15,121.35
+南通,31.55,32.75,120.35,122.15
+连云港,33.75,35.15,118.35,120.15
+淮安,32.75,34.15,118.35,120.15
+盐城,32.55,34.35,119.55,121.15
+扬州,32.15,33.35,119.15,119.95
+镇江,31.55,32.55,119.15,119.75
+泰州,32.15,33.35,119.55,120.55
+宿迁,33.25,34.35,117.75,119.15
+杭州,29.75,30.75,119.15,120.35
+宁波,28.75,30.35,120.55,122.35
+温州,27.15,28.75,119.75,121.55
+嘉兴,30.25,31.05,120.15,121.35
+湖州,30.35,31.15,119.55,120.75
+绍兴,29.35,30.35,119.75,121.15
+金华,28.55,29.75,119.15,120.75
+衢州,28.35,29.55,118.15,119.35
+舟山,29.35,30.55,121.55,123.15
+台州,28.15,29.35,120.55,122.15
+丽水,27.55,28.75,118.75,120.35
+合肥,31.25,32.55,116.55,117.85
+芜湖,30.75,31.75,117.75,119.15
+蚌埠,32.35,33.55,116.75,118.15
+淮南,32.15,33.15,116.15,117.35
+马鞍山,31.35,32.15,118.15,119.15
+淮北,33.35,34.35,116.35,117.35
+铜陵,30.55,31.35,117.55,118.35
+安庆,29.75,31.35,115.75,117.35
+黄山,29.35,30.55,117.35,118.75
+滁州,31.75,33.15,117.55,119.35
+阜阳,32.15,33.75,114.75,116.55
+宿州,33.15,34.55,116.15,118.15
+六安,31.15,32.75,115.55,117.35
+亳州,32.75,34.15,115.15,116.55
+池州,29.55,30.75,116.75,118.15
+宣城,30.15,31.35,118.15,119.55
+福州,25.55,26.75,118.55,120.15
+厦门,24.15,24.85,117.75,118.55
+莆田,25.15,25.85,118.55,119.55
+三明,25.55,27.15,116.55,118.35
+泉州,24.55,25.55,117.75,119.15
+漳州,23.55,25.15,116.55,118.35
+南平,26.35,28.15,117.35,119.35
+龙岩,24.35,26.15,115.75,117.55
+宁德,26.15,27.55,118.75,120.55
+南昌,28.15,29.35,115.35,116.75
+景德镇,28.75,29.75,116.75,117.75
+萍乡,27.15,28.15,113.55,114.35
+九江,28.65,30.15,114.75,117.15
+新余,27.35,28.15,114.35,115.15
+鹰潭,27.75,28.65,116.55,117.55
+赣州,24.55,27.15,113.75,116.55
+吉安,26.15,27.55,113.75,115.55
+宜春,27.35,28.95,113.75,116.15
+抚州,26.75,28.15,115.75,117.15
+上饶,27.55,29.35,116.75,118.55
+济南,36.15,37.35,116.35,117.75
+青岛,35.55,37.15,119.55,121.15
+淄博,35.75,37.15,117.35,118.75
+枣庄,34.35,35.35,116.75,117.95
+东营,36.75,38.35,118.15,119.55
+烟台,36.55,38.15,120.35,122.15
+潍坊,35.75,37.35,118.15,120.35
+济宁,34.55,36.15,115.75,117.35
+泰安,35.55,36.55,116.55,117.75
+威海,36.55,37.75,121.55,123.15
+日照,34.75,36.15,118.55,119.75
+临沂,34.35,36.35,117.35,119.35
+德州,36.35,38.15,115.55,117.55
+聊城,35.55,37.15,115.15,116.75
+滨州,36.75,38.35,117.15,118.75
+菏泽,34.15,35.75,114.75,116.55
+郑州,34.35,35.15,113.15,114.15
+开封,34.15,35.15,113.75,115.15
+洛阳,33.75,35.15,111.35,113.15
+平顶山,33.15,34.15,112.15,113.75
+安阳,35.55,36.55,113.75,115.35
+鹤壁,35.35,36.15,113.75,114.75
+新乡,34.75,35.75,113.35,115.15
+焦作,34.75,35.55,112.55,113.75
+濮阳,35.35,36.35,114.35,116.15
+许昌,33.55,34.55,113.35,114.55
+漯河,33.15,34.15,113.35,114.55
+三门峡,33.55,35.15,110.35,112.35
+南阳,32.35,34.15,110.75,113.35
+商丘,33.55,34.75,114.75,116.75
+信阳,31.35,33.15,113.35,116.15
+周口,33.15,34.35,114.15,116.15
+驻马店,32.35,33.75,113.35,115.55
+济源,34.75,35.55,112.15,113.15
+武汉,30.05,31.15,113.55,114.75
+黄石,29.75,30.55,114.55,115.75
+十堰,31.75,33.35,109.55,111.55
+宜昌,29.75,31.35,110.15,112.15
+襄阳,31.55,33.15,110.75,113.15
+鄂州,30.15,30.75,114.35,115.15
+荆门,30.15,31.55,111.75,113.55
+孝感,30.35,31.75,113.35,115.15
+荆州,29.55,31.15,111.75,113.55
+黄冈,29.55,31.55,114.75,116.55
+咸宁,29.15,30.35,113.35,115.15
+随州,31.15,32.55,112.55,114.15
+恩施,29.55,31.55,108.55,110.55
+长沙,27.75,28.75,112.55,113.75
+株洲,26.75,28.15,112.75,114.15
+湘潭,27.35,28.35,112.15,113.35
+衡阳,26.35,27.75,111.75,113.55
+邵阳,26.15,27.55,109.75,112.15
+岳阳,28.75,29.75,112.75,114.35
+常德,28.35,30.15,110.75,112.55
+张家界,28.75,30.15,109.75,111.35
+益阳,27.75,29.15,111.55,113.15
+郴州,24.75,26.55,112.35,114.35
+永州,25.15,26.75,110.75,112.55
+怀化,26.15,28.55,108.75,111.15
+娄底,27.15,28.35,110.75,112.55
+湘西,27.75,29.75,108.75,110.55
+广州,22.55,23.75,112.75,114.15
+韶关,23.75,25.55,112.75,115.15
+深圳,22.15,22.75,113.75,114.75
+珠海,21.75,22.55,113.15,114.15
+汕头,22.75,23.75,116.15,117.35
+佛山,22.55,23.55,112.55,113.55
+江门,21.55,22.95,111.75,113.55
+湛江,20.35,21.75,109.55,111.15
+茂名,21.35,22.55,110.35,111.75
+肇庆,22.75,24.35,111.15,113.15
+惠州,22.35,23.95,113.75,115.55
+梅州,23.55,24.75,115.15,116.75
+汕尾,22.55,23.55,115.15,116.55
+河源,23.35,24.75,114.15,115.95
+阳江,21.35,22.35,111.15,112.55
+清远,23.35,25.35,111.75,114.15
+东莞,22.55,23.35,113.35,114.35
+中山,22.15,22.75,113.15,113.75
+潮州,23.35,24.15,116.35,117.15
+揭阳,22.75,23.75,115.75,116.75
+云浮,22.55,23.75,111.35,112.55
+南宁,22.15,23.35,107.35,109.15
+柳州,23.75,25.75,108.15,110.15
+桂林,24.75,26.55,109.35,111.75
+梧州,22.75,24.55,110.35,112.15
+北海,21.15,21.95,108.55,109.75
+防城港,21.55,22.35,107.55,108.75
+钦州,21.55,22.75,108.15,109.55
+贵港,22.55,23.95,109.15,110.75
+玉林,21.75,23.35,109.55,111.35
+百色,22.75,25.55,104.75,108.15
+贺州,23.75,25.35,110.75,112.35
+河池,23.75,25.75,106.75,109.35
+来宾,23.35,24.75,108.55,110.35
+崇左,21.55,23.35,106.35,108.35
+海口,19.55,20.35,110.15,110.75
+三亚,18.15,18.75,108.55,109.75
+三沙,9.55,15.55,110.15,117.55
+儋州,19.15,19.95,108.75,109.75
+成都,30.15,31.15,103.35,104.75
+自贡,28.75,29.75,104.15,105.35
+攀枝花,26.15,27.35,101.35,102.35
+泸州,27.75,29.15,105.15,106.55
+德阳,30.75,31.75,103.55,105.15
+绵阳,30.75,32.75,103.35,105.55
+广元,31.75,33.15,104.75,106.75
+遂宁,30.15,31.15,105.35,106.35
+内江,29.15,30.15,104.35,105.55
+乐山,28.75,29.95,102.75,104.15
+南充,30.35,31.75,105.35,107.15
+眉山,29.55,30.55,102.75,104.15
+宜宾,27.75,29.15,103.75,105.55
+广安,30.15,31.15,106.15,107.55
+达州,30.75,32.55,106.55,108.55
+雅安,29.15,30.55,101.75,103.55
+巴中,31.35,32.75,106.15,107.75
+资阳,29.75,30.75,104.15,105.55
+阿坝,30.75,34.15,100.75,104.35
+甘孜,28.15,34.15,97.35,102.55
+凉山,26.15,29.35,101.15,103.75
+贵阳,26.15,27.35,106.15,107.55
+六盘水,25.35,26.75,104.15,105.95
+遵义,27.15,29.15,105.75,108.35
+安顺,25.55,26.75,105.15,106.55
+毕节,26.35,27.75,103.75,106.55
+铜仁,26.75,29.15,107.75,109.75
+黔西南,24.75,26.15,104.15,106.55
+黔东南,25.15,27.15,107.35,109.75
+黔南,25.15,27.15,106.35,108.35
+昆明,24.35,25.75,102.15,103.75
+曲靖,24.75,26.75,103.15,105.15
+玉溪,23.15,24.55,101.75,103.35
+保山,24.15,25.95,98.35,100.35
+昭通,26.55,28.55,102.75,105.35
+丽江,25.55,27.55,99.35,101.35
+普洱,21.75,24.15,99.35,102.35
+临沧,23.15,25.35,98.75,100.75
+楚雄,24.35,26.35,100.75,102.75
+红河,22.75,24.75,101.75,104.55
+文山,22.75,24.55,103.35,106.35
+西双版纳,21.15,22.55,99.75,101.75
+大理,24.75,26.55,98.75,100.75
+德宏,23.55,25.35,97.35,99.15
+怒江,25.15,28.55,98.35,100.35
+迪庆,26.75,29.55,98.35,100.35
+拉萨,29.15,30.35,90.35,92.35
+日喀则,27.75,30.15,84.15,89.35
+昌都,30.15,33.15,95.75,99.35
+林芝,27.75,30.75,92.35,97.35
+山南,27.35,29.75,90.15,94.75
+那曲,30.15,34.15,87.35,94.35
+阿里,30.15,36.15,78.35,84.35
+西安,33.55,34.75,108.15,109.75
+铜川,34.55,35.55,108.35,109.55
+宝鸡,33.75,35.15,106.35,108.15
+咸阳,34.15,35.35,107.55,109.35
+渭南,34.15,35.75,108.75,110.55
+延安,35.55,37.55,108.35,110.75
+汉中,32.35,34.15,105.75,108.15
+榆林,36.75,39.75,107.35,111.35
+安康,32.15,34.15,108.15,110.75
+商洛,33.15,34.35,108.75,110.75
+兰州,35.75,37.15,103.15,104.55
+嘉峪关,39.35,40.15,97.75,98.75
+金昌,38.15,39.15,101.35,102.55
+白银,35.75,37.35,103.75,105.55
+天水,34.15,35.35,104.75,106.55
+武威,36.75,38.55,101.75,104.35
+张掖,37.75,39.75,97.35,102.35
+平凉,34.75,35.75,105.75,107.55
+酒泉,38.15,42.55,92.35,100.35
+庆阳,35.55,37.35,106.75,108.75
+定西,34.35,35.95,103.75,105.55
+陇南,32.35,34.35,103.75,106.55
+临夏,34.75,36.15,102.75,104.35
+甘南,33.35,35.75,101.75,104.55
+西宁,36.15,37.35,101.15,102.35
+海东,35.75,37.15,101.35,103.15
+海北,36.35,38.55,98.35,102.55
+黄南,34.75,36.35,100.35,102.55
+海南州,35.15,37.15,98.75,101.55
+果洛,32.75,36.15,96.35,100.55
+玉树,31.75,36.55,91.35,97.75
+海西,35.15,39.15,90.35,98.55
+银川,37.75,39.15,105.75,106.95
+石嘴山,38.55,39.55,105.75,107.15
+吴忠,36.75,38.35,105.35,107.15
+固原,35.35,36.95,105.15,106.95
+中卫,36.55,38.15,104.35,106.55
+乌鲁木齐,43.15,44.35,86.55,88.35
+克拉玛依,44.75,46.15,84.35,86.35
+吐鲁番,41.75,43.55,88.15,90.75
+哈密,41.15,44.15,90.35,95.75
+昌吉,43.15,45.55,85.75,91.35
+博尔塔拉,44.15,45.75,81.35,83.55
+巴音郭楞,35.75,42.75,82.75,90.55
+阿克苏,39.35,42.55,78.35,84.15
+克孜勒苏,37.75,41.15,73.35,76.55
+喀什,35.75,40.35,73.55,78.55
+和田,34.75,39.75,77.35,82.55
+伊犁,42.15,44.55,80.15,84.55
+塔城,44.15,47.35,81.35,87.35
+阿勒泰,45.15,49.15,85.35,91.35`;
+
+    let CITY_DB = [];
+    let dbLoaded = false;
+
+    function loadCityDB() {
+      CITY_DB = CITY_DATA_INLINE.trim().split('\n').map(line => {
+        const parts = line.split(',');
+        if (parts.length < 5) return null;
+        return { name: parts[0], minLat: parseFloat(parts[1]), maxLat: parseFloat(parts[2]), minLng: parseFloat(parts[3]), maxLng: parseFloat(parts[4]) };
+      }).filter(Boolean);
+      dbLoaded = true;
+      console.log(`City DB loaded: ${CITY_DB.length} cities`);
+    }
+
+    function matchCity(lat, lng) {
+      for (const city of CITY_DB) {
+        if (lat >= city.minLat && lat <= city.maxLat && lng >= city.minLng && lng <= city.maxLng) return city;
+      }
+      return null;
+    }
+
+    // ---- DOM refs ----
+    const uploadSection = document.getElementById('uploadSection');
+    const uploadZone = document.getElementById('uploadZone');
+    const fileInput = document.getElementById('fileInput');
+    const errorMsg = document.getElementById('errorMsg');
+    const errorText = document.getElementById('errorText');
+    const resultsSection = document.getElementById('resultsSection');
+    const previewImg = document.getElementById('previewImg');
+    const fileNameEl = document.getElementById('fileName');
+    const fileMeta = document.getElementById('fileMeta');
+    const statDanger = document.getElementById('statDanger');
+    const statTotal = document.getElementById('statTotal');
+    const statClean = document.getElementById('statClean');
+    const dangerCount = document.getElementById('dangerCount');
+    const totalCount = document.getElementById('totalCount');
+    const gpsSection = document.getElementById('gpsSection');
+    const allMetaSection = document.getElementById('allMetaSection');
+    const allMetaBody = document.getElementById('allMetaBody');
+    const allMetaCount = document.getElementById('allMetaCount');
+    const noDataSection = document.getElementById('noDataSection');
+    const btnClean = document.getElementById('btnClean');
+    const btnCleanText = document.getElementById('btnCleanText');
+    const btnReset = document.getElementById('btnReset');
+
+    let currentFile = null;
+
+    // ---- Tilt ----
+    function attachTilt(el) {
+      el.addEventListener('mousemove', (e) => {
+        const rect = el.getBoundingClientRect();
+        const x = e.clientX - rect.left, y = e.clientY - rect.top;
+        el.style.setProperty('--mouse-x', x + 'px');
+        el.style.setProperty('--mouse-y', y + 'px');
+        const cx = rect.width / 2, cy = rect.height / 2;
+        el.style.transform = `perspective(1000px) rotateX(${(y-cy)/cy*-2.5}deg) rotateY(${(x-cx)/cx*2.5}deg)`;
+      });
+      el.addEventListener('mouseleave', () => { el.style.transform = 'perspective(1000px) rotateX(0deg) rotateY(0deg)'; });
+    }
+    document.querySelectorAll('.glass-card').forEach(attachTilt);
+
+    // ---- Ripple ----
+    function createRipple(e) {
+      const btn = e.currentTarget, rect = btn.getBoundingClientRect();
+      const ripple = document.createElement('span');
+      ripple.className = 'ripple';
+      const size = Math.max(rect.width, rect.height);
+      ripple.style.width = ripple.style.height = size + 'px';
+      ripple.style.left = (e.clientX - rect.left - size / 2) + 'px';
+      ripple.style.top = (e.clientY - rect.top - size / 2) + 'px';
+      btn.appendChild(ripple);
+      setTimeout(() => ripple.remove(), 600);
+    }
+    btnClean.addEventListener('click', (e) => { createRipple(e); stripMetadata(); });
+    btnReset.addEventListener('click', (e) => { createRipple(e); reset(); });
+
+    // ---- Upload ----
+    uploadZone.addEventListener('click', () => fileInput.click());
+    uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.classList.add('drag-over'); });
+    uploadZone.addEventListener('dragleave', (e) => { e.preventDefault(); uploadZone.classList.remove('drag-over'); });
+    uploadZone.addEventListener('drop', (e) => { e.preventDefault(); uploadZone.classList.remove('drag-over'); const f = e.dataTransfer.files[0]; if (f) handleFile(f); });
+    fileInput.addEventListener('change', (e) => { const f = e.target.files[0]; if (f) handleFile(f); });
+
+    // ---- Core ----
+    function showError(msg) { errorText.textContent = msg; errorMsg.classList.remove('hidden'); }
+    function hideError() { errorMsg.classList.add('hidden'); }
+
+    function formatValue(value) {
+      if (value instanceof Date) return value.toLocaleString('zh-CN');
+      if (typeof value === 'number') return Math.abs(value) > 1000 ? value.toLocaleString('zh-CN') : String(value);
+      if (typeof value === 'object' && value !== null) {
+        if (value.numerator !== undefined && value.denominator !== undefined) {
+          if (value.denominator === 0) return '∞';
+          const v = value.numerator / value.denominator;
+          if (v < 1 && value.denominator > 1) return value.numerator + '/' + value.denominator + ' 秒';
+          return v.toFixed(2);
+        }
+        if (value.latitude !== undefined && value.longitude !== undefined) return value.latitude.toFixed(6) + '°, ' + value.longitude.toFixed(6) + '°';
+        return JSON.stringify(value);
+      }
+      return String(value);
+    }
+
+    function extractGPS(data) {
+      let lat = null, lng = null;
+      
+      // exifr 会自动计算 latitude/longitude
+      if (data.latitude !== undefined && data.latitude !== null) lat = data.latitude;
+      if (data.longitude !== undefined && data.longitude !== null) lng = data.longitude;
+      
+      // 备用：直接读取 GPS 字段
+      if (lat === null && data.GPSLatitude !== undefined) {
+        const gpsLat = data.GPSLatitude;
+        if (typeof gpsLat === 'number') lat = gpsLat;
+        else if (typeof gpsLat === 'object' && gpsLat !== null) {
+          if (gpsLat.latitude !== undefined) lat = gpsLat.latitude;
+          else if (gpsLat.valueOf) lat = gpsLat.valueOf();
+        }
+      }
+      
+      if (lng === null && data.GPSLongitude !== undefined) {
+        const gpsLng = data.GPSLongitude;
+        if (typeof gpsLng === 'number') lng = gpsLng;
+        else if (typeof gpsLng === 'object' && gpsLng !== null) {
+          if (gpsLng.longitude !== undefined) lng = gpsLng.longitude;
+          else if (gpsLng.valueOf) lng = gpsLng.valueOf();
+        }
+      }
+      
+      // 处理 GPSPosition 对象
+      if (data.GPSPosition && typeof data.GPSPosition === 'object') {
+        if (lat === null && data.GPSPosition.latitude !== undefined) lat = data.GPSPosition.latitude;
+        if (lng === null && data.GPSPosition.longitude !== undefined) lng = data.GPSPosition.longitude;
+      }
+      
+      // 处理 GPS 坐标方向（N/S, E/W）
+      if (lat !== null && data.GPSLatitudeRef) {
+        if (data.GPSLatitudeRef === 'S' || data.GPSLatitudeRef === 83) lat = -Math.abs(lat);
+      }
+      if (lng !== null && data.GPSLongitudeRef) {
+        if (data.GPSLongitudeRef === 'W' || data.GPSLongitudeRef === 87) lng = -Math.abs(lng);
+      }
+      
+      return { lat, lng };
+    }
+
+    function renderGPS(lat, lng) {
+      gpsSection.innerHTML = '';
+      gpsSection.classList.remove('hidden');
+      if (lat === null || lng === null || !dbLoaded) { gpsSection.classList.add('hidden'); return; }
+
+      const city = matchCity(lat, lng);
+      const div = document.createElement('div');
+      if (city) {
+        div.className = 'gps-card gps-card-hit';
+        div.innerHTML = `
+          <div class="gps-header">
+            <svg viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
+            </svg>
+            <span class="gps-label">📍 推测位置</span>
+          </div>
+          <div class="gps-city">${escapeHtml(city.name)}</div>
+          <div class="gps-coords">${lat.toFixed(6)}°N, ${lng.toFixed(6)}°E</div>
+          <div class="gps-hint" style="color:#fca5a5">⚠️ 此信息泄露了你的真实位置，建议立即清洗！</div>
+        `;
+      } else {
+        const coordStr = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+        div.className = 'gps-card gps-card-miss';
+        div.innerHTML = `
+          <div class="gps-header">
+            <svg viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.5)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>
+            </svg>
+            <span class="gps-label">📍 GPS 坐标</span>
+          </div>
+          <div class="gps-coords" style="font-size:1rem;color:rgba(255,255,255,0.7);margin:8px 0">${coordStr}</div>
+          <div class="gps-hint">⚠️ 未在本地数据库匹配到确切城市。请打开地图软件，输入此经纬度查看具体位置。</div>
+          <button class="btn-copy" data-coords="${coordStr}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+            🗺️ 复制坐标到剪贴板
+          </button>
+        `;
+        gpsSection.appendChild(div);
+        div.querySelector('.btn-copy').addEventListener('click', () => {
+          navigator.clipboard.writeText(coordStr).then(() => {
+            const btn = div.querySelector('.btn-copy');
+            btn.textContent = '✓ 已复制';
+            setTimeout(() => { btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> 🗺️ 复制坐标到剪贴板'; }, 2000);
+          });
+        });
+        return;
+      }
+      gpsSection.appendChild(div);
+    }
+
+    function renderAllMeta(entries) {
+      allMetaBody.innerHTML = '';
+      if (entries.length === 0) {
+        allMetaSection.classList.add('hidden');
+        return;
+      }
+      allMetaSection.classList.remove('hidden');
+      allMetaCount.textContent = entries.length + ' 项';
+
+      // 按类别排序：GPS > 设备 > 拍摄参数 > 时间 > 其他
+      const order = ['gps','device','capture','time','other'];
+      const categorized = { gps:[], device:[], capture:[], time:[], other:[] };
+
+      entries.forEach(entry => {
+        const key = entry.key.toLowerCase();
+        if (key.startsWith('gps') || key === 'latitude' || key === 'longitude' || key === 'altitude') {
+          categorized.gps.push(entry);
+        } else if (['make','model','lensmodel','lensmake','lensinfo','lensspecification','serialnumber','internalserialnumber','cameraserialnumber','lensserialnumber','bodyserialnumber','software'].includes(key)) {
+          categorized.device.push(entry);
+        } else if (['datetimeoriginal','createdate','modifydate','datetime','datetimedigitized','subsectime','subsectimeoriginal','subsectimedigitized','offsettime','offsettimeoriginal','offsettimedigitized'].includes(key)) {
+          categorized.time.push(entry);
+        } else if (['exposuretime','fnumber','iso','isospeedratings','focallength','focallengthin35mmformat','shutterspeedvalue','aperturevalue','brightnessvalue','exposurecompensation','meteringmode','flash','whitebalance','exposuremode','exposureprogram'].includes(key)) {
+          categorized.capture.push(entry);
+        } else {
+          categorized.other.push(entry);
+        }
+      });
+
+      const categoryNames = { gps:'📍 GPS 定位', device:'📷 设备信息', capture:'🔧 拍摄参数', time:'🕐 时间信息', other:'📄 其他信息' };
+
+      order.forEach(cat => {
+        if (categorized[cat].length === 0) return;
+        // Category header row
+        const headerRow = document.createElement('tr');
+        headerRow.innerHTML = `<td colspan="2" style="padding:12px 12px 6px;font-size:0.8rem;font-weight:600;color:rgba(255,255,255,0.5);border-bottom:1px solid rgba(255,255,255,0.08)">${categoryNames[cat]} (${categorized[cat].length})</td>`;
+        allMetaBody.appendChild(headerRow);
+
+        categorized[cat].forEach(entry => {
+          const tr = document.createElement('tr');
+          if (entry.sensitive) tr.className = 'row-danger';
+          const dangerTag = entry.sensitive ? '<span class="danger-tag">敏感</span>' : '';
+          tr.innerHTML = `<td class="col-key">${escapeHtml(translateKey(entry.key))}${dangerTag}</td><td class="col-val">${escapeHtml(entry.value)}</td>`;
+          allMetaBody.appendChild(tr);
+        });
+      });
+    }
+
+    async function handleFile(file) {
+      const validTypes = ['image/jpeg','image/png','image/heic','image/heif','image/webp'];
+      if (!validTypes.includes(file.type)) { showError('不支持的文件格式，请上传 JPG/PNG/HEIC 图片'); return; }
+
+      hideError();
+      currentFile = file;
+
+      const url = URL.createObjectURL(file);
+      previewImg.src = url;
+      fileNameEl.textContent = file.name;
+      fileMeta.textContent = (file.size / 1024 / 1024).toFixed(2) + ' MB · ' + file.type;
+
+      uploadSection.classList.add('hidden');
+      resultsSection.classList.remove('hidden');
+      statClean.classList.add('hidden');
+      gpsSection.classList.add('hidden');
+      allMetaSection.classList.add('hidden');
+
+      try {
+        // 检查 exifr 是否可用
+        if (typeof exifr === 'undefined') {
+          throw new Error('EXIF 解析库未加载，请检查网络连接后刷新页面');
+        }
+        
+        // 使用 exifr 的标准 API
+        let data = null;
+        
+        // 先尝试直接解析 File 对象
+        try {
+          data = await exifr.parse(file);
+        } catch (e1) {
+          console.warn('直接解析失败，尝试读取为 ArrayBuffer:', e1);
+          // 如果失败，尝试读取为 ArrayBuffer
+          try {
+            const buffer = await file.arrayBuffer();
+            data = await exifr.parse(buffer);
+          } catch (e2) {
+            console.warn('ArrayBuffer 解析也失败:', e2);
+            // 最后尝试只解析基础信息
+            try {
+              data = await exifr.parse(file, { exif: true, gps: true });
+            } catch (e3) {
+              console.error('所有解析方式都失败:', e3);
+              throw new Error('无法解析此图片的 EXIF 数据，请确保是有效的图片文件');
+            }
+          }
+        }
+
+        if (!data || Object.keys(data).length === 0) {
+          allMetaSection.classList.add('hidden');
+          noDataSection.classList.remove('hidden');
+          statDanger.classList.add('hidden');
+          statTotal.classList.add('hidden');
+          gpsSection.classList.add('hidden');
+          return;
+        }
+
+        console.log('EXIF 数据:', data);
+        noDataSection.classList.add('hidden');
+
+        // GPS matching
+        const gps = extractGPS(data);
+        renderGPS(gps.lat, gps.lng);
+
+        // Build all entries
+        const entries = Object.entries(data).map(([key, value]) => ({
+          key, value: formatValue(value), sensitive: SENSITIVE_KEYS.has(key.toLowerCase()),
+        }));
+
+        const sensitive = entries.filter(e => e.sensitive);
+
+        // Stats
+        statTotal.classList.remove('hidden');
+        totalCount.textContent = '共 ' + entries.length + ' 项元数据';
+
+        if (sensitive.length > 0) {
+          statDanger.classList.remove('hidden');
+          dangerCount.textContent = sensitive.length + ' 项敏感';
+        } else {
+          statDanger.classList.add('hidden');
+        }
+
+        // Render full table
+        renderAllMeta(entries);
+
+      } catch (err) {
+        console.error('解析错误:', err);
+        showError('解析 EXIF 数据失败：' + err.message);
+        allMetaSection.classList.add('hidden');
+        noDataSection.classList.add('hidden');
+        statDanger.classList.add('hidden');
+        statTotal.classList.add('hidden');
+        gpsSection.classList.add('hidden');
+      }
+    }
+
+    function escapeHtml(str) { const d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
+
+    async function stripMetadata() {
+      if (!currentFile) return;
+      btnClean.disabled = true;
+      btnCleanText.innerHTML = '<svg class="spinner" width="18" height="18" viewBox="0 0 24 24" fill="none"><circle opacity="0.25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path opacity="0.75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg> 处理中...';
+
+      try {
+        const img = new Image();
+        const url = URL.createObjectURL(currentFile);
+        await new Promise((resolve, reject) => { img.onload = () => resolve(); img.onerror = () => reject(); img.src = url; });
+
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        canvas.getContext('2d').drawImage(img, 0, 0);
+
+        canvas.toBlob((blob) => {
+          if (!blob) { showError('生成干净图片失败'); btnClean.disabled = false; btnCleanText.textContent = '🧹 一键剥离隐私并下载'; return; }
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = currentFile.name.replace(/\.[^.]+$/, '') + '_clean.png';
+          a.click();
+          URL.revokeObjectURL(a.href);
+          statClean.classList.remove('hidden');
+          btnClean.disabled = false;
+          btnCleanText.textContent = '🧹 一键剥离隐私并下载';
+        }, 'image/png', 1.0);
+
+        URL.revokeObjectURL(url);
+      } catch (err) {
+        showError('处理图片时出错');
+        btnClean.disabled = false;
+        btnCleanText.textContent = '🧹 一键剥离隐私并下载';
+      }
+    }
+
+    function reset() {
+      currentFile = null;
+      previewImg.src = '';
+      resultsSection.classList.add('hidden');
+      uploadSection.classList.remove('hidden');
+      hideError();
+      statClean.classList.add('hidden');
+      allMetaSection.classList.add('hidden');
+      noDataSection.classList.add('hidden');
+      gpsSection.classList.add('hidden');
+      fileInput.value = '';
+    }
+
+    loadCityDB();
+  </script>
+</body>
+</html>
