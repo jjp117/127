@@ -35,15 +35,6 @@ Static web implementation. All computations execute within the browser's local s
 ## What is this
 JJP Privacy Lens is a pure client-side image processing tool designed for deep inspection and thorough sanitization of EXIF/IPTC/XMP metadata in digital images. It converts hidden GPS coordinates, device fingerprints, and timestamps into human-readable text and provides a one-click full-stripping solution.
 
-## Design Goal
-The goal is to provide privacy-conscious users with a zero-trust, zero-dependency data desensitization method. Users need no software installation, no environment configuration, and no internet connection (after initial load) to complete the process from "risk discovery" to "risk elimination."
-
-## Execution Mode
-Runs entirely locally in the browser. All parsing and reconstruction operations are based on HTML5 Canvas API and JavaScript logic, independent of any backend services, generating no network requests beyond the initial page load.
-
-## Core Feature: Offline Geocoding
-Includes a lightweight Bounding Box (BBox) database (`china_cities_bbox.txt`) containing latitude/longitude boundaries for major Chinese cities and global hubs. When GPS info is detected, the algorithm matches the nearest city name (e.g., "Beijing", "Shanghai") via rectangle collision detection in real-time, without calling external APIs like Baidu/Amap/Google Maps. If no match is found, raw coordinates are displayed for manual lookup.
-
 ## Sanitization Mechanism: Whitelist Filtering
 Executes a strict whitelist strategy. Retains only header fields necessary for rendering (Width, Height, BitDepth, ColorType), removing all other tags (including GPSInfo, DateTimeOriginal, Make, Model, Software, Artist, Thumbnail, etc.). Output files are lossless PNG format, ensuring pixel integrity with zero historical traces.
 
@@ -63,5 +54,3 @@ This tool provides no cloud storage or logging of any kind. Closing the tab imme
 - **Operation Granularity**: Full-strip mode only; selective retention of specific fields (e.g., keep time but remove GPS) is not supported.
 - **Batch Processing**: Current version limited to single-image processing per session.
 
-## License
-This project is licensed under the MIT License.
